@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>QR-Code Ansicht</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+</head>
+<body>
+
+<h1>QR-Code</h1>
+
+<div class="card">
+<label for="lagerplatzSelect">Lagerplatz wählen:</label>
+<select id="lagerplatzSelect">
+<option value="Vinothek-1">Vinothek - 1</option>
+<option value="Vinothek-2">Vinothek - 2</option>
+<option value="Hauskeller-1">Hauskeller - 1</option>
+<option value="Hauskeller-2">Hauskeller - 2</option>
+</select>
+<button onclick="generateQR()">QR erzeugen</button>
+</div>
+
+<div class="card">
+<canvas id="qrCanvas"></canvas>
+</div>
+
+<div class="card">
+<button onclick="window.location.href='index.html'">⬅️ Zurück</button>
+</div>
+
+<script>
+function generateQR() {
+    const val = document.getElementById("lagerplatzSelect").value;
+    const qr = new QRious({
+        element: document.getElementById('qrCanvas'),
+        value: val,
+        size: 250
+    });
+}
+</script>
+
+</body>
+</html>

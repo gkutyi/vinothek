@@ -1,0 +1,15 @@
+
+platform :ios, '15.0'
+
+use_frameworks!
+use_modular_headers!
+
+def capacitor_pods
+  pod 'Capacitor', :path => '../../node_modules/@capacitor/ios'
+  pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/ios'
+  pod 'CapawesomeCapacitorMlkitBarcodeScanning', :path => '../../node_modules/@capacitor-mlkit/barcode-scanning'
+end
+
+target 'App' do
+  capacitor_pods
+end

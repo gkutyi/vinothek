@@ -1,0 +1,198 @@
+let db;
+let sortField = "name";
+let sortAsc = true;
+
+// ================= DB =================
+function initDB() {
+    return new Promise((resolve, reject) => {
+        let request = indexedDB.open("VinothekDB", 2);
+
+        request.onupgradeneeded = function(e) {
+            db = e.target.result;
+
+            if(!db.objectStoreNames.contains("weine")) {
+                db.createObjectStore("weine", { keyPath: "id", autoIncrement: true });
+            }
+
+            if(!db.objectStoreNames.contains("syncQueue")) {
+                db.createObjectStore("syncQueue", { autoIncrement: true });
+            }
+        };
+
+        request.onsuccess = function(e) {
+            db = e.target.result;
+            resolve();
+        };
+
+        request.onerror = reject;
+    });
+}
+
+// ================= ADD =================
+function addWine() {
+    let w = {
+        name: document.getElementById("name").value,
+        jahrgang: document.getElementById("jahrgang").value,
+        region: document.getElementById("region").value,
+        lagerort: document.getElementById("lagerort").value,
+        platz: document.getElementById("platz").value,
+        anzahl: parseInt(document.getElementById("anzahl").value || 0)
+    };
+
+    let tx = db.transaction("weine", "readwrite");
+    tx.objectStore("weine").add(w);
+
+    tx.oncomplete = () => {
+        queueSync();
+        loadWeine();
+    };
+}
+
+// ================= LOAD =================
+function loadWeine() {
+    let tbody = document.querySelector("#weinTable tbody");
+    tbody.innerHTML = "";
+
+    let search = document.getElementById("search").value.toLowerCase();
+    let items = [];
+
+    let tx = db.transaction("weine", "readonly").objectStore("weine");
+
+    tx.openCursor().onsuccess = function(e) {
+        let cursor = e.target.result;
+
+        if(cursor) {
+            let w = cursor.value;
+            if(JSON.stringify(w).toLowerCase().includes(search)) {
+                items.push(w);
+            }
+            cursor.continue();
+        } else {
+            render(items);
+        }
+    };
+}
+
+// ================= RENDER =================
+function render(items) {
+    let tbody = document.querySelector("#weinTable tbody");
+
+    items.sort((a,b)=>{
+        let x = a[sortField] || "";
+        let y = b[sortField] || "";
+
+        if(x<y) return sortAsc?-1:1;
+        if(x>y) return sortAsc?1:-1;
+        return 0;
+    });
+
+    items.forEach(w=>{
+        let row = document.createElement("tr");
+        if(w.anzahl < 3) row.classList.add("low");
+
+        row.innerHTML = `
+        <td>${w.name}</td>
+        <td>${w.jahrgang}</td>
+        <td>${w.region}</td>
+        <td>${w.lagerort}</td>
+        <td>${w.platz}</td>
+        <td>
+            <button onclick="updateAmount(${w.id},-1)">-</button>
+            ${w.anzahl}
+            <button onclick="updateAmount(${w.id},1)">+</button>
+        </td>
+        <td>
+            <button onclick="deleteWine(${w.id})">🗑</button>
+        </td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+// ================= UPDATE =================
+function updateAmount(id, change) {
+    let tx = db.transaction("weine", "readwrite");
+    let store = tx.objectStore("weine");
+
+    let req = store.get(id);
+    req.onsuccess = function() {
+        let w = req.result;
+        w.anzahl += change;
+        if(w.anzahl < 0) w.anzahl = 0;
+
+        store.put(w);
+        queueSync();
+        loadWeine();
+    };
+}
+
+// ================= DELETE =================
+function deleteWine(id) {
+    let tx = db.transaction("weine", "readwrite");
+    tx.objectStore("weine").delete(id);
+
+    tx.oncomplete = ()=>{
+        queueSync();
+        loadWeine();
+    };
+}
+
+// ================= QR SCANNER =================
+async function scanQR() {
+    try {
+        const result = await Capacitor.Plugins.BarcodeScanner.scan();
+        document.getElementById("platz").value = result.content;
+    } catch(e) {
+        alert("Scanner Fehler");
+    }
+}
+
+// ================= SYNC QUEUE =================
+function queueSync() {
+    let tx = db.transaction("syncQueue", "readwrite");
+    tx.objectStore("syncQueue").add({ time: Date.now() });
+}
+
+// ================= SYNC =================
+async function sync() {
+    if(!navigator.onLine) return;
+
+    let data = [];
+
+    let tx = db.transaction("weine", "readonly").objectStore("weine");
+
+    await new Promise(resolve=>{
+        tx.openCursor().onsuccess = function(e) {
+            let cursor = e.target.result;
+            if(cursor){
+                data.push(cursor.value);
+                cursor.continue();
+            } else resolve();
+        };
+    });
+
+    try {
+        await fetch("http://10.0.0.30:5000/api/weine", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data)
+        });
+
+        let tx2 = db.transaction("syncQueue","readwrite");
+        tx2.objectStore("syncQueue").clear();
+
+        console.log("Sync OK");
+
+    } catch(e) {
+        console.log("Sync fehlgeschlagen");
+    }
+}
+
+// ================= AUTO SYNC =================
+setInterval(sync, 10000);
+
+// ================= START =================
+document.addEventListener("DOMContentLoaded", async ()=>{
+    await initDB();
+    loadWeine();
+});

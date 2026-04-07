@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<button onclick="window.location.href='index.html'">⬅ Zurück</button>
+
+<h1>📊 Dashboard PRO</h1>
+
+<div class="card">
+<h3>Gesamtbestand</h3>
+<div id="total"></div>
+</div>
+
+<div class="card">
+<h3>Gesamtwert (€)</h3>
+<div id="value"></div>
+</div>
+
+<div class="card">
+<h3>Flaschen pro Region</h3>
+<canvas id="regionChart"></canvas>
+</div>
+
+<div class="card">
+<h3>Jahrgänge</h3>
+<canvas id="yearChart"></canvas>
+</div>
+
+<script src="dashboard.js"></script>
+
+</body>
+</html>

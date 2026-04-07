@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Vinothek</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<h1>🍷 Vinothek</h1>
+
+<input id="search" placeholder="🔍 Suche..." oninput="loadWeine()">
+
+<hr>
+
+<input id="name" placeholder="Name">
+<input id="jahrgang" placeholder="Jahrgang">
+<input id="region" placeholder="Region">
+<input id="lagerort" placeholder="Lagerort">
+<input id="platz" placeholder="Platz">
+<input id="anzahl" type="number" placeholder="Anzahl">
+
+<button onclick="addWine()">➕ Wein speichern</button>
+
+<hr>
+
+<table id="weinTable">
+    <thead>
+        <tr>
+            <th onclick="setSort('name')">Name</th>
+            <th onclick="setSort('jahrgang')">Jahrgang</th>
+            <th onclick="setSort('region')">Region</th>
+            <th onclick="setSort('lagerort')">Ort</th>
+            <th onclick="setSort('platz')">Platz</th>
+            <th>Bestand</th>
+            <th>Aktion</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<div id="debug"></div>
+
+<script src="app.js"></script>
+
+</body>
+</html>

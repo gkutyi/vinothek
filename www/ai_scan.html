@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+<button onclick="goBack()">⬅ Zurück</button>
+
+<h2>📸 Etikett scannen</h2>
+
+<input type="file" accept="image/*" capture="environment" id="imageInput">
+
+<button onclick="scanLabel()">Scan starten</button>
+
+<pre id="result"></pre>
+
+<button onclick="applyData()">➡️ In Formular übernehmen</button>
+
+<script src="ai_scan.js"></script>
+
+<script>
+function goBack(){
+    window.location.href="index.html";
+}
+</script>
+
+</body>
+</html>

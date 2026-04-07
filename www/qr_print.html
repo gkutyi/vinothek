@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+
+<style>
+.label{
+    border:1px solid black;
+    width:250px;
+    padding:10px;
+    margin:10px;
+    display:inline-block;
+}
+</style>
+</head>
+<body>
+
+<button onclick="window.print()">🖨 Drucken</button>
+<button onclick="goBack()">⬅ Zurück</button>
+
+<div id="labels"></div>
+
+<script src="qr_print.js"></script>
+
+<script>
+function goBack(){
+    window.location.href="index.html";
+}
+</script>
+
+</body>
+</html>

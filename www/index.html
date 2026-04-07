@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vinothek App</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+    <h1>Meine Vinothek �</h1>
+    <div id="currentLocation">Lager / Platz</div>
+</header>
+
+<section id="formSection">
+    <h2>Wein erfassen</h2>
+    <form id="wineForm" onsubmit="saveWine(); return false;">
+        <label>Name: <input type="text" id="name" required></label>
+        <label>Jahrgang: <input type="number" id="jahrgang"></label>
+        <label>Winzer: <input type="text" id="winzer"></label>
+        <label>Region: <input type="text" id="region"></label>
+        <label>Alkohol %: <input type="text" id="alkohol"></label>
+        <label>Anzahl: <input type="number" id="anzahl" value="1"></label>
+        <label>Lagerort: <input type="text" id="global_lagerort"></label>
+        <label>Platz: <input type="text" id="global_platz"></label>
+        <label>Notizen: <textarea id="notizen"></textarea></label>
+        <label>Rating: <input type="text" id="rating"></label>
+        <label>Preis €: <input type="text" id="preis"></label>
+        <label>Trinkfenster von: <input type="text" id="trinkVon"></label>
+        <label>bis: <input type="text" id="trinkBis"></label>
+        <label>Quelle: <input type="text" id="quelle"></label>
+        <!-- Vorschau Front -->
+        <img id="imagePreview_front" width="100" alt="Front Vorschau">
+
+        <!-- Vorschau Back -->
+		<img id="imagePreview_back" width="100" alt="Back Vorschau">
+        <button type="submit">� Speichern</button>
+    </form>
+</section>
+
+<div class="row">
+    <button onclick="selectImage('front')">� Front</button>
+    <button onclick="selectImage('back')">� Back</button>
+    <button onclick="analyzeWineWithAI()">� KI-Analyse</button>
+    <div id="qr-reader" style="display:none; width:100%; max-width:400px;"></div>
+    <button onclick="startQRScan()">📷 QR scannen</button>
+</div>
+
+<!-- Hidden Inputs für Front und Back -->
+<input type="file" id="labelPhotoFront" accept="image/*" capture="environment" style="display:none" onchange="loadWineImage(this, 'front')">
+<input type="file" id="labelPhotoBack" accept="image/*" capture="environment" style="display:none" onchange="loadWineImage(this, 'back')">
+
+<section id="tableSection">
+    <h2>Weinliste</h2>
+    <table id="weinTable">
+        <thead>
+            <tr>
+                <th onclick="sortTable('name')">Name</th>
+                <th onclick="sortTable('jahrgang')">Jahrgang</th>
+                <th onclick="sortTable('winzer')">Winzer</th>
+                <th onclick="sortTable('region')">Region</th>
+                <th onclick="sortTable('alkohol')">Alkohol</th>
+                <th onclick="sortTable('lagerort')">Lager / Platz</th>
+                <th onclick="sortTable('anzahl')">Anzahl</th>
+                <th>Notizen</th>
+                <th>Bilder</th>
+                <th>Quelle</th>
+                <th onclick="sortTable('rating')">Rating</th>
+                <th onclick="sortTable('preis')">Preis</th>
+                <th>Trinkfenster</th>
+                <th>Aktionen</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</section>
+
+<section id="backupSection">
+    <h2>Backup / Restore</h2>
+    <button onclick="exportBackup()">� Exportieren</button>
+    <input type="file" id="importFile">
+    <button onclick="importBackup()">� Importieren</button>
+</section>
+
+<section id="FeatureSection">
+    <h2>QR-Codes / Lagerrorte / Dashboard</h2>
+<button onclick="openQRPage()">� QR Lagerplätze</button>
+<button onclick="window.location.href='shelf.html'">Lagerorte</button>
+<button onclick="window.location.href='dashboard.html'">Dashboard</button>
+</section>
+
+
+<!-- Modal für Bilder -->
+<div id="imageModal" class="modal" onclick="closeImageModal()">
+    <img id="modalImage" src="" alt="Wein Bild">
+</div>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="app.js"></script>
+</body>
+</html>
