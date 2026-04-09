@@ -1,83 +1,64 @@
+// --------------------
+// GLOBALS
+// --------------------
 let db;
 let isLoadingTable = false;
 let qrScanner = null;
-let currentWineImageFront = "";
-let currentWineImageBack = "";
-let currentScanSide = "";
+let wineImages = { front: null, back: null };
+let wineAnalysis = {};
+let suppressSync = false;
+let currentEditId = null;
+let wineCache = [];
 let currentSortField = "";
 let sortAsc = true;
-let wineCache = [];
-let selectedImageType = null;
-// Beispiel:
-let wineImages = { front: null, back: null };
-let wineAnalysis = {}; // KI-Ergebnisse
-let suppressSync = false; // kurze Pause nach Save
-let currentEditId = null;
 
 const DB_NAME = "vinothekDB";
 const DB_VERSION = 6;
 const SERVER_URL = "http://10.0.0.30:5000";
 const API_URL = `${SERVER_URL}/api/weine`;
-
+const isMobileApp = window.location.protocol === "capacitor:";
 
 // --------------------
 // DB START
 // --------------------
-const request = indexedDB.open(DB_NAME, DB_VERSION);
+if (isMobileApp) {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-request.onupgradeneeded = e => {
-    db = e.target.result;
-    if (!db.objectStoreNames.contains("weine")) {
-        db.createObjectStore("weine", { keyPath: "id" });
-    }
-    if (!db.objectStoreNames.contains("syncQueue")) {
-        db.createObjectStore("syncQueue", { keyPath: "queueId", autoIncrement: true });
-    }
-    if (!db.objectStoreNames.contains("deletedWeine")) {
-        db.createObjectStore("deletedWeine", { keyPath: "id" });
-    }
-};
+    request.onupgradeneeded = e => {
+        db = e.target.result;
+        if (!db.objectStoreNames.contains("weine")) db.createObjectStore("weine", { keyPath: "id" });
+        if (!db.objectStoreNames.contains("syncQueue")) db.createObjectStore("syncQueue", { keyPath: "queueId", autoIncrement: true });
+        if (!db.objectStoreNames.contains("deletedWeine")) db.createObjectStore("deletedWeine", { keyPath: "id" });
+    };
 
-request.onsuccess = e => {
-    db = e.target.result;
-    console.log("DB bereit");
-    processQueue();
-    syncFromServer();
-    setTimeout(() => loadWineFromQR(), 500);
-    setInterval(() => {
+    request.onsuccess = e => {
+        db = e.target.result;
+        console.log("IndexedDB bereit");
+
         processQueue();
         syncFromServer();
-    }, 10000);
-};
+        setTimeout(() => loadWineFromQR(), 500);
 
-request.onerror = e => {
-    console.error("DB Fehler", e);
-};
+        setInterval(() => {
+            processQueue();
+            syncFromServer();
+        }, 10000);
+    };
+
+    request.onerror = e => console.error("DB Fehler", e);
+}
 
 // --------------------
-// QUEUE
+// QUEUE (Handy-App) 
 // --------------------
 function addToQueue(type, data) {
     if (!db) return;
 
     const tx = db.transaction("syncQueue", "readwrite");
     const store = tx.objectStore("syncQueue");
+    let itemId = (type === "save") ? data.wineData.id : data;
 
-    let itemId;
-
-    if (type === "save") {
-        itemId = data.wineData.id;
-    } else {
-        itemId = data;
-    }
-
-    store.add({
-        type,
-        data,
-        entityId: itemId,
-        createdAt: Date.now()
-    });
-
+    store.add({ type, data, entityId: itemId, createdAt: Date.now() });
     console.log("QUEUE gespeichert:", type, itemId);
 }
 
@@ -93,57 +74,27 @@ function processQueue() {
 
         const item = cursor.value;
         const queueId = item.queueId;
-
         let request;
 
         if (item.type === "save") {
             const formData = new FormData();
             formData.append("wine", JSON.stringify(item.data.wineData));
-
-            // Bilder wieder als File erzeugen
-            if (item.data.images.front) {
-                formData.append(
-                    "bildFront",
-                    dataURLtoFile(item.data.images.front, "front.jpg")
-                );
-            }
-            if (item.data.images.back) {
-                formData.append(
-                    "bildBack",
-                    dataURLtoFile(item.data.images.back, "back.jpg")
-                );
-            }
-
+            if (item.data.images.front) formData.append("bildFront", dataURLtoFile(item.data.images.front, "front.jpg"));
+            if (item.data.images.back) formData.append("bildBack", dataURLtoFile(item.data.images.back, "back.jpg"));
             request = fetch(API_URL, { method: "POST", body: formData });
         } else if (item.type === "delete") {
             request = fetch(`${API_URL}/${item.data}`, { method: "DELETE" });
         }
 
-        if (!request) {
-            cursor.continue();
-            return;
-        }
+        if (!request) { cursor.continue(); return; }
 
-        request
-            .then(async (res) => {
-                let data;
-                try {
-                    // Versuch JSON zu parsen, falls Body leer ist, fallback auf {}
-                    data = res.status !== 204 ? await res.json() : {};
-                } catch {
-                    data = {};
-                }
-
-                console.log("QUEUE SERVER OK:", data);
-
-                const delTx = db.transaction("syncQueue", "readwrite");
-                delTx.objectStore("syncQueue").delete(queueId);
-
-                console.log("QUEUE entfernt", queueId);
-            })
-            .catch((err) => {
-                console.error("QUEUE Fehler:", err);
-            });
+        request.then(async res => {
+            let data;
+            try { data = res.status !== 204 ? await res.json() : {}; } catch { data = {}; }
+            console.log("QUEUE SERVER OK:", data);
+            db.transaction("syncQueue", "readwrite").objectStore("syncQueue").delete(queueId);
+            console.log("QUEUE entfernt", queueId);
+        }).catch(err => console.error("QUEUE Fehler:", err));
 
         cursor.continue();
     };
@@ -159,17 +110,20 @@ function setStorageLocation() {
 }
 
 // --------------------
-// SPEICHERN
+// SAVE WINE (Plattformabhängig)
 // --------------------
-// Wein speichern (aktuell vorhandene Logik)
 async function saveWine() {
     console.log("SAVE START");
     console.log("currentEditId:", window.currentEditId);
     console.log("wineImages:", wineImages);
-    if (!db) {
-        alert("Datenbank noch nicht bereit");
-        return;
+
+    // --- Lagerort prüfen ---
+    const lagerort = document.getElementById("global_lagerort").value;
+    if (!lagerort || lagerort.trim() === "") {
+        alert("Bitte Lagerort angeben, bevor der Wein gespeichert wird!");
+        return; // Speichern abbrechen
     }
+    const platz = document.getElementById("global_platz").value || "";
 
     // --- Formular auslesen ---
     const wine = {};
@@ -178,54 +132,46 @@ async function saveWine() {
 
     // --- ID und Zeitstempel ---
     wine.id = window.currentEditId || Date.now();
-
-    if (!window.currentEditId) {
-        wine.createdAt = Date.now();
-    } else {
-        wine.createdAt = wine.createdAt || Date.now();
-    }
-
-wine.updatedAt = Date.now();
+    wine.createdAt = window.currentEditId ? wine.createdAt || Date.now() : Date.now();
     wine.updatedAt = Date.now();
 
-    wine.lagerort = document.getElementById("global_lagerort").value;
-    wine.platz = document.getElementById("global_platz").value;
+    wine.lagerort = lagerort;
+    wine.platz = platz;
 
-    // --- Bilder aus wineImages übernehmen ---
-    if (typeof wineImages.front === "string") wine.bildFront = wineImages.front;
-    if (typeof wineImages.back === "string") wine.bildBack = wineImages.back;
+    if (typeof wineImages.front === "string" || wineImages.front instanceof File)
+        wine.bildFront = wineImages.front;
+    if (typeof wineImages.back === "string" || wineImages.back instanceof File)
+        wine.bildBack = wineImages.back;
 
-    // --- lokal speichern ---
-    const tx = db.transaction("weine", "readwrite");
-    tx.objectStore("weine").put(wine);
+    // --- Plattformabhängig speichern ---
+    if (isMobileApp) {
+        if (!db) { alert("Datenbank noch nicht bereit"); return; }
 
-    tx.oncomplete = async () => {
-        // Tabelle aktualisieren
-        loadWeine();
+        const tx = db.transaction("weine", "readwrite");
+        tx.objectStore("weine").put(wine);
 
-        // --- Base64 vorbereiten ---
-        let frontBase64 = null;
-        let backBase64 = null;
-        if (wineImages.front && wineImages.front instanceof File)
-            frontBase64 = await fileToBase64(wineImages.front);
-        if (wineImages.back && wineImages.back instanceof File)
-            backBase64 = await fileToBase64(wineImages.back);
+        tx.oncomplete = async () => {
+            loadWeine();
+            let frontBase64 = wineImages.front instanceof File ? await fileToBase64(wineImages.front) : null;
+            let backBase64 = wineImages.back instanceof File ? await fileToBase64(wineImages.back) : null;
+            addToQueue("save", { wineData: wine, images: { front: frontBase64, back: backBase64 } });
+            clearWineForm();
+            suppressSync = true;
+            setTimeout(() => { suppressSync = false; }, 2000);
+        };
+        tx.onerror = e => console.error("IndexedDB Error beim Speichern:", e);
 
-        // --- Queue füllen ---
-        addToQueue("save", {
-            wineData: wine,
-            images: { front: frontBase64, back: backBase64 }
-        });
+    } else {
+        // Browser: direkt Server
+        const formData = new FormData();
+        formData.append("wine", JSON.stringify(wine));
+        if (wineImages.front instanceof File) formData.append("bildFront", wineImages.front);
+        if (wineImages.back instanceof File) formData.append("bildBack", wineImages.back);
 
-        // --- Formular leeren ---
-        clearWineForm();
-
-        // --- Sync kurz pausieren ---
-        suppressSync = true;
-        setTimeout(() => { suppressSync = false; }, 2000);
-    };
-
-    tx.onerror = e => console.error("IndexedDB Error beim Speichern:", e);
+        fetch(API_URL, { method: "POST", body: formData })
+            .then(() => { alert("Wein gespeichert"); clearWineForm(); loadWeine(); })
+            .catch(err => console.error("Save Fehler Browser:", err));
+    }
 }
 
 // --------------------
@@ -271,65 +217,57 @@ function fileToBase64(file) {
 }
 
 // --------------------
-// LADEN
+// LOAD WEINE (Plattformabhängig)
 // --------------------
-async function loadWeine() {
+function loadWeine() {
+    if (isMobileApp) loadWeineMobile();
+    else loadWeineBrowser();
+}
+
+// Browser: direkt Server
+async function loadWeineBrowser() {
+    try {
+        const res = await fetch(API_URL);
+        const wines = await res.json();
+        wineCache = wines;
+        renderWineTable(wines);
+    } catch (err) {
+        console.error("Fehler Browser-Laden:", err);
+    }
+}
+
+// Handy-App: IndexedDB + Server Merge
+async function loadWeineMobile() {
     if (!db || isLoadingTable) return;
     isLoadingTable = true;
 
     const tbody = document.querySelector("#weinTable tbody");
-    if (!tbody) {
-        isLoadingTable = false;
-        return;
-    }
+    if (!tbody) { isLoadingTable = false; return; }
 
     const wines = [];
-
-    // 1️⃣ IndexedDB laden
     const tx = db.transaction("weine", "readonly");
-    const store = tx.objectStore("weine");
-    store.openCursor().onsuccess = e => {
+    tx.objectStore("weine").openCursor().onsuccess = e => {
         const cursor = e.target.result;
-        if (cursor) {
-            wines.push(cursor.value);
-            cursor.continue();
-        } else {
+        if (cursor) { wines.push(cursor.value); cursor.continue(); }
+        else {
             wineCache = wines;
+            if (currentSortField) applySort(); else renderWineTable(wines);
 
-            // Tabelle zuerst mit local IndexedDB-Daten rendern
-            if (currentSortField) applySort();
-            else renderWineTable(wines);
-
-            // 2️⃣ Server-Daten nachladen und Mergen
-            fetch(API_URL)
-                .then(res => res.json())
-                .then(serverData => {
-                    if (Array.isArray(serverData)) {
-                        // Merge Serverdaten in IndexedDB-Daten (falls neue Einträge vorhanden)
-                        serverData.forEach(sWine => {
-                            if (!wines.some(w => w.id === sWine.id)) {
-                                wines.push(sWine);
-                                const txAdd = db.transaction("weine", "readwrite");
-                                txAdd.objectStore("weine").put(sWine);
-                            }
-                        });
-                        // Tabelle neu rendern
-                        if (currentSortField) applySort();
-                        else renderWineTable(wines);
-                    }
-                    isLoadingTable = false;
-                })
-                .catch(err => {
-                    console.error("Fehler beim Laden von Serverdaten:", err);
-                    isLoadingTable = false;
-                });
+            fetch(API_URL).then(r => r.json()).then(serverData => {
+                if (Array.isArray(serverData)) {
+                    serverData.forEach(sWine => {
+                        if (!wines.some(w => w.id === sWine.id)) {
+                            wines.push(sWine);
+                            db.transaction("weine", "readwrite").objectStore("weine").put(sWine);
+                        }
+                    });
+                    if (currentSortField) applySort(); else renderWineTable(wines);
+                }
+                isLoadingTable = false;
+            }).catch(err => { console.error("Fehler Serverdaten:", err); isLoadingTable = false; });
         }
     };
-
-    tx.onerror = () => {
-        console.error("Fehler beim Laden von IndexedDB");
-        isLoadingTable = false;
-    };
+    tx.onerror = () => { console.error("Fehler IndexedDB"); isLoadingTable = false; };
 }
 
 function loadWineFromQR() {
@@ -416,17 +354,18 @@ function deleteWineOnServer(id) {
         .catch(() => { addToQueue("delete", id); });
 }
 
+// --------------------
+// SYNC (Handy-App)
+// --------------------
 function syncFromServer() {
-    if (suppressSync) return; // kurz pausieren
+    if (!isMobileApp || suppressSync) return;
 
     fetch(API_URL)
         .then(r => r.json())
         .then(serverData => {
             const tx = db.transaction("weine", "readwrite");
             const store = tx.objectStore("weine");
-
             serverData.forEach(w => store.put(w));
-
             tx.oncomplete = () => loadWeine();
         })
         .catch(err => console.log("kein Server erreichbar", err));
