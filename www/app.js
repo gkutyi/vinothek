@@ -59,22 +59,26 @@ request.onerror = e => {
 // --------------------
 function addToQueue(type, data) {
     if (!db) return;
+
     const tx = db.transaction("syncQueue", "readwrite");
     const store = tx.objectStore("syncQueue");
-    const itemId = type === "save" ? data.id : data;
 
-    store.openCursor().onsuccess = e => {
-        const cursor = e.target.result;
-        if (cursor) {
-            const item = cursor.value;
-            const queuedId = item.type === "save" ? item.data.id : item.data;
-            if (queuedId === itemId) cursor.delete();
-            cursor.continue();
-            return;
-        }
-        store.add({ type, data, entityId: itemId, createdAt: Date.now() });
-        console.log("QUEUE gespeichert:", type, itemId);
-    };
+    let itemId;
+
+    if (type === "save") {
+        itemId = data.wineData.id;
+    } else {
+        itemId = data;
+    }
+
+    store.add({
+        type,
+        data,
+        entityId: itemId,
+        createdAt: Date.now()
+    });
+
+    console.log("QUEUE gespeichert:", type, itemId);
 }
 
 function processQueue() {
@@ -159,6 +163,9 @@ function setStorageLocation() {
 // --------------------
 // Wein speichern (aktuell vorhandene Logik)
 async function saveWine() {
+    console.log("SAVE START");
+    console.log("currentEditId:", window.currentEditId);
+    console.log("wineImages:", wineImages);
     if (!db) {
         alert("Datenbank noch nicht bereit");
         return;
@@ -170,8 +177,15 @@ async function saveWine() {
         .forEach(el => wine[el.id] = el.value);
 
     // --- ID und Zeitstempel ---
-    wine.id = currentEditId || Date.now();
-    wine.createdAt = currentEditId ? wine.createdAt : Date.now();
+    wine.id = window.currentEditId || Date.now();
+
+    if (!window.currentEditId) {
+        wine.createdAt = Date.now();
+    } else {
+        wine.createdAt = wine.createdAt || Date.now();
+    }
+
+wine.updatedAt = Date.now();
     wine.updatedAt = Date.now();
 
     wine.lagerort = document.getElementById("global_lagerort").value;
@@ -370,6 +384,8 @@ function loadWineIntoForm(wine) {
     const imgBack = document.getElementById("imagePreview_back");
     if (imgFront) imgFront.src = wine.bildFront || "";
     if (imgBack) imgBack.src = wine.bildBack || "";
+    window.currentEditId = wine.id;
+    console.log("QR LOAD currentEditId:", window.currentEditId);
 }
 
 // --------------------
@@ -453,6 +469,7 @@ function importBackup() {
 // EDIT/LOAD FORM
 // --------------------
 function editWine(id) {
+    console.log("EDIT gestartet mit ID:", id);
     if (!db) return;
 
     const tx = db.transaction("weine", "readonly");
@@ -485,6 +502,11 @@ function editWine(id) {
         currentWineImageBack = w.bildRueck || "";
 
         window.currentEditId = w.id;
+        wineImages.front = w.bildFront || null;
+        wineImages.back = w.bildBack || null;
+
+        console.log("Bilder geladen:", wineImages);
+        console.log("currentEditId gesetzt:", window.currentEditId);
     };
 }
 
@@ -872,5 +894,28 @@ function handleQRScanResult(qrUrl) {
             return;
         }
         cursor.continue();
+    };
+}
+
+// --------------------
+// Reset IndexDB
+// --------------------
+function resetLocalDB() {
+    if (!confirm("Lokale Datenbank wirklich löschen?")) return;
+
+    const tx = db.transaction(["weine", "syncQueue"], "readwrite");
+
+    tx.objectStore("weine").clear();
+    tx.objectStore("syncQueue").clear();
+
+    tx.oncomplete = () => {
+        console.log("IndexedDB zurückgesetzt");
+        alert("Lokale Daten gelöscht");
+
+        loadWeine();
+    };
+
+    tx.onerror = (e) => {
+        console.error("Reset Fehler:", e);
     };
 }
