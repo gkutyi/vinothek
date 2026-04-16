@@ -11,6 +11,8 @@ let currentEditId = null;
 let wineCache = [];
 let currentSortField = "";
 let sortAsc = true;
+let initDone = false;
+let dbReady = false;
 
 const DB_NAME = "vinothekDB";
 const DB_VERSION = 6;
@@ -36,13 +38,8 @@ if (isMobileApp) {
         console.log("IndexedDB bereit");
 
         processQueue();
-        syncFromServer();
-        setTimeout(() => loadWineFromQR(), 500);
-
-        setInterval(() => {
-            processQueue();
-            syncFromServer();
-        }, 10000);
+        startGlobalSync();
+        initApp();
     };
 
     request.onerror = e => console.error("DB Fehler", e);
@@ -81,8 +78,10 @@ function processQueue() {
             formData.append("wine", JSON.stringify(item.data.wineData));
             if (item.data.images.front) formData.append("bildFront", dataURLtoFile(item.data.images.front, "front.jpg"));
             if (item.data.images.back) formData.append("bildBack", dataURLtoFile(item.data.images.back, "back.jpg"));
+            console.log("API_URL:", API_URL);
             request = fetch(API_URL, { method: "POST", body: formData });
         } else if (item.type === "delete") {
+            console.log("API_URL:", API_URL);
             request = fetch(`${API_URL}/${item.data}`, { method: "DELETE" });
         }
 
@@ -100,6 +99,17 @@ function processQueue() {
     };
 }
 
+function hasPendingQueueItems(callback) {
+    const tx = db.transaction("syncQueue", "readonly");
+    const store = tx.objectStore("syncQueue");
+
+    const req = store.count();
+
+    req.onsuccess = () => {
+        callback(req.result > 0);
+    };
+}
+
 // --------------------
 // LAGERPLATZ
 // --------------------
@@ -114,7 +124,7 @@ function setStorageLocation() {
 // --------------------
 async function saveWine() {
     console.log("SAVE START");
-    console.log("currentEditId:", window.currentEditId);
+    console.log("currentEditId:", currentEditId);
     console.log("wineImages:", wineImages);
 
     // --- Lagerort prüfen ---
@@ -131,8 +141,8 @@ async function saveWine() {
         .forEach(el => wine[el.id] = el.value);
 
     // --- ID und Zeitstempel ---
-    wine.id = window.currentEditId || Date.now();
-    wine.createdAt = window.currentEditId ? wine.createdAt || Date.now() : Date.now();
+    wine.id = String(currentEditId || Date.now());
+    wine.createdAt = currentEditId ? wine.createdAt || Date.now() : Date.now();
     wine.updatedAt = Date.now();
 
     wine.lagerort = lagerort;
@@ -168,6 +178,7 @@ async function saveWine() {
         if (wineImages.front instanceof File) formData.append("bildFront", wineImages.front);
         if (wineImages.back instanceof File) formData.append("bildBack", wineImages.back);
 
+        console.log("API_URL:", API_URL);
         fetch(API_URL, { method: "POST", body: formData })
             .then(() => { alert("Wein gespeichert"); clearWineForm(); loadWeine(); })
             .catch(err => console.error("Save Fehler Browser:", err));
@@ -195,6 +206,7 @@ function clearWineForm() {
 async function initWeineFromServer() {
     if (!db) return;
 
+    console.log("API_URL:", API_URL);
     const response = await fetch(API_URL);
     const wines = await response.json();
 
@@ -220,54 +232,118 @@ function fileToBase64(file) {
 // LOAD WEINE (Plattformabhängig)
 // --------------------
 function loadWeine() {
+    if (isMobileApp && !db) {
+        console.warn("DB noch nicht ready");
+        return;
+    }
+
     if (isMobileApp) loadWeineMobile();
     else loadWeineBrowser();
 }
 
 // Browser: direkt Server
 async function loadWeineBrowser() {
+    console.log("loadWeineBrowser()");
+
     try {
+        console.log("API_URL:", API_URL);
         const res = await fetch(API_URL);
         const wines = await res.json();
-        wineCache = wines;
-        renderWineTable(wines);
+        console.log("SERVER DATA:", wines);
+
+        wineCache = []; // � RESET
+
+        if (Array.isArray(wines)) {
+            wineCache = wines;
+        }
+
+        renderWineTable(wineCache);
+
     } catch (err) {
         console.error("Fehler Browser-Laden:", err);
     }
 }
 
 // Handy-App: IndexedDB + Server Merge
+
 async function loadWeineMobile() {
     if (!db || isLoadingTable) return;
     isLoadingTable = true;
 
     const tbody = document.querySelector("#weinTable tbody");
-    if (!tbody) { isLoadingTable = false; return; }
+    if (!tbody) {
+        isLoadingTable = false;
+        return;
+    }
 
     const wines = [];
     const tx = db.transaction("weine", "readonly");
-    tx.objectStore("weine").openCursor().onsuccess = e => {
-        const cursor = e.target.result;
-        if (cursor) { wines.push(cursor.value); cursor.continue(); }
-        else {
-            wineCache = wines;
-            if (currentSortField) applySort(); else renderWineTable(wines);
+    const store = tx.objectStore("weine");
 
-            fetch(API_URL).then(r => r.json()).then(serverData => {
-                if (Array.isArray(serverData)) {
+    store.openCursor().onsuccess = e => {
+        const cursor = e.target.result;
+
+        if (cursor) {
+            wines.push(cursor.value);
+            cursor.continue();
+        } else {
+            wineCache = wines;
+
+            if (currentSortField) applySort();
+            else renderWineTable(wines);
+
+            // -----------------------------
+            // SERVER SYNC
+            // -----------------------------
+            console.log("API_URL:", API_URL);
+
+            fetch(API_URL)
+                .then(r => r.json())
+                .then(serverData => {
+
+                    const tx2 = db.transaction("weine", "readwrite");
+                    const store2 = tx2.objectStore("weine");
+
                     serverData.forEach(sWine => {
-                        if (!wines.some(w => w.id === sWine.id)) {
-                            wines.push(sWine);
-                            db.transaction("weine", "readwrite").objectStore("weine").put(sWine);
-                        }
+                        store2.put(sWine);
                     });
-                    if (currentSortField) applySort(); else renderWineTable(wines);
-                }
-                isLoadingTable = false;
-            }).catch(err => { console.error("Fehler Serverdaten:", err); isLoadingTable = false; });
+
+                    tx2.oncomplete = () => {
+                        loadWeineFromIndexedDB();
+                        isLoadingTable = false;
+                    };
+                })
+                .catch(err => {
+                    console.error("Fetch ERROR - load Wine Mobile:", err);
+                    console.error("Fetch message:", err?.message);
+                    console.error("Fetch string:", JSON.stringify(err));
+                    console.error("Fehler Serverdaten:", err);
+                    isLoadingTable = false;
+                });
         }
     };
-    tx.onerror = () => { console.error("Fehler IndexedDB"); isLoadingTable = false; };
+
+    tx.onerror = () => {
+        console.error("Fehler IndexedDB");
+        isLoadingTable = false;
+    };
+}
+
+function loadWeineFromIndexedDB() {
+    const wines = [];
+    const tx = db.transaction("weine", "readonly");
+    const store = tx.objectStore("weine");
+
+    store.openCursor().onsuccess = e => {
+        const cursor = e.target.result;
+        if (cursor) {
+            wines.push(cursor.value);
+            cursor.continue();
+        } else {
+            wineCache = wines;
+            renderWineTable(wines);
+        }
+    };
 }
 
 function loadWineFromQR() {
@@ -322,19 +398,46 @@ function loadWineIntoForm(wine) {
     const imgBack = document.getElementById("imagePreview_back");
     if (imgFront) imgFront.src = wine.bildFront || "";
     if (imgBack) imgBack.src = wine.bildBack || "";
-    window.currentEditId = wine.id;
-    console.log("QR LOAD currentEditId:", window.currentEditId);
+    currentEditId = wine.id;
+    console.log("QR LOAD currentEditId:", currentEditId);
 }
 
 // --------------------
 // LÖSCHEN
 // --------------------
 function deleteWine(id) {
-    if (!db) return;
-    const tx = db.transaction("weine", "readwrite");
-    tx.objectStore("weine").delete(id);
-    addToQueue("delete", id);
-    tx.oncomplete = () => { loadWeine(); deleteWineOnServer(id); };
+    console.log("DELETE:", id);
+
+    if (isMobileApp) {
+        if (!db) {
+            alert("Datenbank nicht bereit");
+            return;
+        }
+
+        const tx = db.transaction("weine", "readwrite");
+        tx.objectStore("weine").delete(id);
+
+        tx.oncomplete = () => {
+            addToQueue("delete", id);
+            loadWeine();
+        };
+
+        tx.onerror = e => console.error("Delete Mobile Fehler:", e);
+
+    } else {
+        // Browser → direkt Server
+        console.log("API_URL:", API_URL);
+        fetch(`${API_URL}/${id}`, {
+            method: "DELETE"
+        })
+        .then(() => {
+            console.log("Browser Delete OK");
+            loadWeine();
+        })
+        .catch(err => {
+            console.error("Delete Browser Fehler:", err);
+        });
+    }
 }
 
 // --------------------
@@ -343,112 +446,257 @@ function deleteWine(id) {
 function syncWineToServer(wine) {
     console.log("WINE SAVE OBJECT:", wine);
     console.log("JSON STRING:", JSON.stringify(wine));
+    console.log("API_URL:", API_URL);
     fetch(API_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(wine) })
         .then(() => console.log("SYNC OK"))
         .catch(() => { addToQueue("save", wine); });
 }
 
 function deleteWineOnServer(id) {
+    console.log("API_URL:", API_URL);
     fetch(`${API_URL}/${id}`, { method: "DELETE" })
         .then(() => console.log("DELETE OK"))
         .catch(() => { addToQueue("delete", id); });
 }
 
 // --------------------
-// SYNC (Handy-App)
+// SYNC 
 // --------------------
 function syncFromServer() {
-    if (!isMobileApp || suppressSync) return;
+    if (suppressSync) return;
 
+    console.log("API_URL:", API_URL);
     fetch(API_URL)
         .then(r => r.json())
         .then(serverData => {
             const tx = db.transaction("weine", "readwrite");
             const store = tx.objectStore("weine");
+
+            const serverIds = serverData.map(w => String(w.id));
+
+            // Serverdaten aktualisieren
             serverData.forEach(w => store.put(w));
+
+            // lokale Datensätze prüfen und gelöschte entfernen
+            store.openCursor().onsuccess = e => {
+                const cursor = e.target.result;
+                if (!cursor) return;
+
+                const localWine = cursor.value;
+
+                if (!serverIds.includes(String(localWine.id))) {
+                    console.log("Lokal löschen:", localWine.id);
+                    cursor.delete();
+                }
+
+                cursor.continue();
+            };
+
             tx.oncomplete = () => loadWeine();
         })
-        .catch(err => console.log("kein Server erreichbar", err));
+        .catch(err => {
+            console.error("Fetch ERROR Sync From Server:", err);
+            console.error("Fetch message:", err?.message);
+            console.error("Fetch string:", JSON.stringify(err));
+            isLoadingTable = false;
+            console.log("kein Server erreichbar", err);
+        });
 }
 
 
 // --------------------
 // EXPORT/IMPORT
 // --------------------
-function exportBackup() {
+async function exportBackup() {
+    // --------------------
+    // Browser
+    // --------------------
+    if (!isMobileApp) {
+        const exportData = Array.isArray(wineCache) ? wineCache : [];
+
+        const blob = new Blob(
+            [JSON.stringify(exportData, null, 2)],
+            { type: "application/json" }
+        );
+
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "vinothek-backup.json";
+        a.click();
+
+        return;
+    }
+
+    // --------------------
+    // Mobile App
+    // --------------------
+    if (!db) {
+        alert("Datenbank noch nicht bereit");
+        return;
+    }
+
     const wines = [];
     const tx = db.transaction("weine", "readonly");
-    tx.objectStore("weine").openCursor().onsuccess = e => {
+    const store = tx.objectStore("weine");
+
+    store.openCursor().onsuccess = async e => {
         const cursor = e.target.result;
-        if (cursor) { wines.push(cursor.value); cursor.continue(); }
-        else {
-            const blob = new Blob([JSON.stringify(wines, null, 2)], { type: "application/json" });
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = "backup.json";
-            a.click();
+
+        if (cursor) {
+            wines.push(cursor.value);
+            cursor.continue();
+        } else {
+            const jsonText = JSON.stringify(wines, null, 2);
+
+            try {
+                await navigator.share({
+                    title: "Vinothek Backup",
+                    text: jsonText
+                });
+            } catch (err) {
+                console.error("Export Fehler:", err);
+            }
         }
     };
 }
 
 function importBackup() {
-    const file = document.getElementById("importFile").files[0];
-    if (!file) { alert("Datei wählen"); return; }
+    const input = document.getElementById("importFile");
+
+    if (!input || !input.files || input.files.length === 0) {
+        alert("Datei wählen");
+        return;
+    }
+
+    const file = input.files[0];
     const reader = new FileReader();
+
     reader.onload = e => {
-        const data = JSON.parse(e.target.result);
-        const tx = db.transaction("weine", "readwrite");
-        data.forEach(w => { tx.objectStore("weine").put(w); syncWineToServer(w); });
-        tx.oncomplete = () => loadWeine();
+        try {
+            const data = JSON.parse(e.target.result);
+
+            if (isMobileApp) {
+                const tx = db.transaction("weine", "readwrite");
+                const store = tx.objectStore("weine");
+
+                data.forEach(w => store.put(w));
+
+                tx.oncomplete = () => {
+                    loadWeine();
+                    alert("Import erfolgreich");
+                };
+
+            } else {
+                // ✅ HIER kommt dein Promise.all rein
+                Promise.all(
+                    data.map(w => {
+                        const formData = new FormData();
+                        formData.append("wine", JSON.stringify(w));
+
+                        return fetch(API_URL, {
+                            method: "POST",
+                            body: formData
+                        });
+                    })
+                ).then(() => {
+                    alert("Import fertig");
+                    loadWeine();
+                }).catch(err => {
+                    console.error("Import Fehler:", err);
+                    alert("Fehler beim Import");
+                });
+            }
+
+        } catch (err) {
+            console.error("Import Fehler:", err);
+            alert("Ungültige JSON Datei");
+        }
     };
+
     reader.readAsText(file);
 }
 
 // --------------------
 // EDIT/LOAD FORM
 // --------------------
-function editWine(id) {
-    console.log("EDIT gestartet mit ID:", id);
-    if (!db) return;
+async function editWine(id) {
+    id = String(id);   // WICHTIG
 
-    const tx = db.transaction("weine", "readonly");
-    const store = tx.objectStore("weine");
+    console.log("EDIT gestartet:", id);
+    console.log("wineCache:", wineCache);
 
-    const req = store.get(id);
+    let w = null;
 
-    req.onsuccess = e => {
-        const w = e.target.result;
-        if (!w) return;
+    // -------------------------
+    // 1. MOBILE (IndexedDB)
+    // -------------------------
+    if (isMobileApp && db) {
+        w = await new Promise((resolve) => {
+            const tx = db.transaction("weine", "readonly");
+            const store = tx.objectStore("weine");
 
-        document.getElementById("name").value = w.name || "";
-        document.getElementById("jahrgang").value = w.jahrgang || "";
-        document.getElementById("region").value = w.region || "";
-        document.getElementById("winzer").value = w.winzer || "";
-        document.getElementById("alkohol").value = w.alkohol || "";
-        document.getElementById("anzahl").value = w.anzahl || 1;
-        document.getElementById("notizen").value = w.notizen || "";
-        document.getElementById("rating").value = w.rating || "";
-        document.getElementById("preis").value = w.preis || "";
-        document.getElementById("trinkVon").value = w.trinkfensterVon || "";
-        document.getElementById("trinkBis").value = w.trinkfensterBis || "";
-        document.getElementById("quelle").value = w.bewertungsQuelle || "";
+            console.log("Suche ID:", id, typeof id);
 
-        // WICHTIG
-        document.getElementById("global_lagerort").value = w.lagerort || "Vinothek";
-        document.getElementById("global_platz").value = w.platz || "";
+            const req = store.get(id);
 
-        currentWineImageFront = w.bild || "";
-        currentWineImageBack = w.bildRueck || "";
+            req.onsuccess = e => {
+                console.log("IndexedDB Treffer:", e.target.result);
+                resolve(e.target.result || null);
+            };
 
-        window.currentEditId = w.id;
-        wineImages.front = w.bildFront || null;
-        wineImages.back = w.bildBack || null;
+            req.onerror = err => {
+                console.error("IndexedDB Fehler:", err);
+                resolve(null);
+            };
+        });
+    }
 
-        console.log("Bilder geladen:", wineImages);
-        console.log("currentEditId gesetzt:", window.currentEditId);
-    };
+    // -------------------------
+    // 2. BROWSER
+    // -------------------------
+    else {
+        w = wineCache.find(x => String(x.id) === id);
+
+        if (!w) {
+            try {
+                console.log("API_URL:", API_URL);
+                const res = await fetch(`${API_URL}/${id}`);
+                if (res.ok) w = await res.json();
+            } catch (err) {
+                console.error("Server fetch failed:", err);
+            }
+        }
+    }
+
+    if (!w) {
+        alert("Wein nicht gefunden");
+        return;
+    }
+
+    // Formular
+    document.getElementById("name").value = w.name || "";
+    document.getElementById("jahrgang").value = w.jahrgang || "";
+    document.getElementById("region").value = w.region || "";
+    document.getElementById("winzer").value = w.winzer || "";
+    document.getElementById("alkohol").value = w.alkohol || "";
+    document.getElementById("anzahl").value = w.anzahl || 1;
+    document.getElementById("notizen").value = w.notizen || "";
+    document.getElementById("rating").value = w.rating || "";
+    document.getElementById("preis").value = w.preis || "";
+    document.getElementById("trinkVon").value = w.trinkfensterVon || "";
+    document.getElementById("trinkBis").value = w.trinkfensterBis || "";
+    document.getElementById("quelle").value = w.bewertungsQuelle || "";
+
+    document.getElementById("global_lagerort").value = w.lagerort || "Vinothek";
+    document.getElementById("global_platz").value = w.platz || "";
+
+    wineImages.front = w.bildFront || null;
+    wineImages.back = w.bildBack || null;
+
+    currentEditId = String(w.id);
+
+    console.log("EDIT OK:", w);
 }
-
 
 // --------------------
 // SORT & RENDER
@@ -500,8 +748,7 @@ function renderWineTable(wines) {
         <td>${w.preis?w.preis+" €":""}</td>
         <td>${w.trinkfensterVon||""}${w.trinkfensterBis? " - "+w.trinkfensterBis:""}</td>
         <td>
-            <button onclick="editWine(${w.id})">✏️</button>
-            <button onclick="enrichWineFromTable(${w.id})">Online</button>
+            <button onclick="editWine('${w.id}')">✏️</button>
             <button onclick="deleteWine(${w.id})">&#128465;</button>
         </td>`;
         tbody.appendChild(row);
@@ -546,29 +793,51 @@ function loadWineImage(input, type) {
 // --------------------
 // IMAGE RESIZE HILFSFUNKTION (Promise-basiert)
 // --------------------
-function resizeImage(file, maxWidth, maxHeight, quality = 0.5) {
+function resizeImage(file, maxWidth = 640, maxHeight = 640, quality = 0.85) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
+
         reader.onload = e => {
             const img = new Image();
+
             img.onload = () => {
                 let width = img.width;
                 let height = img.height;
-                if (width > maxWidth) { height *= maxWidth / width; width = maxWidth; }
-                if (height > maxHeight) { width *= maxHeight / height; height = maxHeight; }
+
+                if (width > maxWidth) {
+                    height *= maxWidth / width;
+                    width = maxWidth;
+                }
+
+                if (height > maxHeight) {
+                    width *= maxHeight / height;
+                    height = maxHeight;
+                }
 
                 const canvas = document.createElement("canvas");
+                const ctx = canvas.getContext("2d");
+
                 canvas.width = width;
                 canvas.height = height;
-                canvas.getContext("2d").drawImage(img, 0, 0, width, height);
 
-                const compressedDataURL = canvas.toDataURL("image/jpeg", quality);
+                // WICHTIG: Graustufen + Kontrast
+                ctx.filter = "grayscale(100%) contrast(120%)";
+
+                ctx.drawImage(img, 0, 0, width, height);
+
+                const compressedDataURL = canvas.toDataURL(
+                    "image/jpeg",
+                    quality
+                );
+
                 resolve(compressedDataURL);
             };
-            img.onerror = err => reject(err);
+
+            img.onerror = reject;
             img.src = e.target.result;
         };
-        reader.onerror = err => reject(err);
+
+        reader.onerror = reject;
         reader.readAsDataURL(file);
     });
 }
@@ -579,52 +848,62 @@ function resizeImage(file, maxWidth, maxHeight, quality = 0.5) {
 
 // KI-Analyse für Front- und Back-Bild
 async function analyzeWineWithAI() {
-    const types = ["front", "back"];
     let mergedAnalysis = {};
 
-    for (let type of types) {
-        const file = wineImages[type];  // wineImages = { front: File, back: File }
-        if (!file) continue;
+    const frontFile = wineImages.front;
+    const backFile = wineImages.back;
 
-        const formData = new FormData();
-        formData.append("file", file);
+    if (!frontFile) {
+        alert("Bitte zuerst das Vorderetikett auswählen.");
+        return;
+    }
 
-        try {
-            const response = await fetch("http://10.0.0.30:5000/api/analyze-label-ai", {
-                method: "POST",
-                body: formData
-            });
+    try {
+        // Bilder verkleinern + Graustufen + Base64
+        const frontBase64 = await resizeImage(frontFile, 640, 640, 0.85);
 
-            const data = await response.json();
-
-            if (response.ok) {
-                // KI-Ergebnisse zusammenführen
-                for (let key in data) {
-                    // Front überschreibt Back nur, wenn Wert leer ist
-                    if (!mergedAnalysis[key] || mergedAnalysis[key] === "") {
-                        mergedAnalysis[key] = data[key];
-                    }
-                }
-            } else {
-                console.error("KI-Analyse Fehler:", data.error);
-                alert("Fehler bei KI-Analyse: " + JSON.stringify(data.error));
-            }
-        } catch (err) {
-            console.error("Fetch Fehler:", err);
-            alert("Fehler beim Senden der Datei an den Server");
+        let backBase64 = null;
+        if (backFile) {
+            backBase64 = await resizeImage(backFile, 640, 640, 0.85);
         }
+
+        const response = await fetch("http://10.0.0.30:5000/api/analyze-label-ai", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                front_image: frontBase64,
+                back_image: backBase64
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error("KI Fehler:", data.error);
+            alert("KI Fehler: " + data.error);
+            return;
+        }
+
+        mergedAnalysis = data;
+
+        // Formular befüllen
+        for (let key in mergedAnalysis) {
+            const input = document.getElementById(key);
+            if (input) {
+                input.value = mergedAnalysis[key];
+            }
+        }
+
+        wineAnalysis = mergedAnalysis;
+
+        alert("KI-Analyse abgeschlossen");
+
+    } catch (err) {
+        console.error("Fetch Fehler:", err);
+        alert("Fehler bei KI-Analyse");
     }
-
-    // Ergebnisse ins Formular eintragen
-    for (let key in mergedAnalysis) {
-        const input = document.getElementById(key);
-        if (input) input.value = mergedAnalysis[key];
-    }
-
-    // Optional: in globales Objekt für weiteren Zugriff speichern
-    wineAnalysis = mergedAnalysis;
-
-    alert("KI-Analyse abgeschlossen und Formular befüllt!");
 }
 
 // --------------------
@@ -749,65 +1028,12 @@ function openWineFromQRText(qrText) {
         document.getElementById("global_lagerort").value = lagerort;
         document.getElementById("global_platz").value = platz;
 
-        loadWineByLocation(lagerort, platz);
-
-    } catch (err) {
-        alert("QR-Code konnte nicht gelesen werden");
-        console.error(err);
-    }
-}
-
-function openWineFromQRText(qrText) {
-    try {
-        const url = new URL(qrText);
-
-        const lagerort = url.searchParams.get("lagerort");
-        const platz = url.searchParams.get("platz");
-
-        if (!lagerort || !platz) {
-            alert("QR-Code ungültig");
-            return;
-        }
-
-        document.getElementById("global_lagerort").value = lagerort;
-        document.getElementById("global_platz").value = platz;
-
         loadWineFromQR();
 
     } catch (err) {
         alert("QR-Code konnte nicht gelesen werden");
         console.error(err);
     }
-}
-
-function loadWineByLocation(lagerort, platz) {
-    if (!db) {
-        alert("Datenbank nicht bereit");
-        return;
-    }
-
-    const tx = db.transaction("weine", "readonly");
-    const store = tx.objectStore("weine");
-
-    store.openCursor().onsuccess = e => {
-        const cursor = e.target.result;
-
-        if (cursor) {
-            const wine = cursor.value;
-
-            if (
-                wine.lagerort === lagerort &&
-                wine.platz === platz
-            ) {
-                loadWineIntoForm(wine);
-                return;
-            }
-
-            cursor.continue();
-        } else {
-            alert("Kein Datensatz für diesen Lagerplatz gefunden");
-        }
-    };
 }
 
 // --------------------
@@ -858,3 +1084,38 @@ function resetLocalDB() {
         console.error("Reset Fehler:", e);
     };
 }
+
+function startGlobalSync() {
+    // sofort einmal sync
+    syncFromServer();
+
+    // dann regelmäßig
+    setInterval(() => {
+        processQueue();
+        syncFromServer();
+        loadWeine();
+    }, 15000); // 15 Sekunden
+}
+
+function initApp() {
+    console.log("App gestartet");
+
+    const isApp = window.Capacitor;
+
+    if (isApp) {
+        document.querySelectorAll(".print-button")
+            .forEach(btn => btn.style.display = "none");
+    }
+
+    loadWeine();
+}
+
+// ======================
+// STARTUP / ENTRY POINT
+// ======================
+
+document.addEventListener("DOMContentLoaded", () => {
+    if (!isMobileApp) {
+        initApp();
+    }
+});

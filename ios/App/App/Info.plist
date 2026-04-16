@@ -50,8 +50,10 @@
 	<key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
-     <true/>
+        <true/>
     </dict>
+	    <key>NSLocalNetworkUsageDescription</key>
+        <string>Die App benötigt Zugriff auf das lokale Netzwerk, um die Vinothek-Daten mit dem Server zu synchronisieren.</string>
 	    <key>NSCameraUsageDescription</key>
         <string>Die Kamera wird zum Scannen von QR-Codes für Lagerplätze verwendet.</string>
     </dict>

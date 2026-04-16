@@ -2,30 +2,124 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+<title>QR Druck</title>
 
 <style>
-.label{
-    border:1px solid black;
-    width:250px;
-    padding:10px;
-    margin:10px;
-    display:inline-block;
+body {
+    font-family: Arial;
+    margin: 10px;
+}
+
+.topbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+button {
+    padding: 10px;
+    font-size: 16px;
+}
+
+#qrContainer {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.card {
+    border: 1px solid black;
+    padding: 10px;
+    text-align: center;
+    page-break-inside: avoid;
 }
 </style>
 </head>
+
 <body>
 
-<button onclick="window.print()">🖨 Drucken</button>
-<button onclick="goBack()">⬅ Zurück</button>
+<div class="topbar">
+    <button onclick="goBack()">⬅ Zurück</button>
 
-<div id="labels"></div>
+    <button class="print-button" onclick="doPrint()">
+        🖨 Print
+    </button>
+</div>
 
-<script src="qr_print.js"></script>
+<div id="qrContainer"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 <script>
-function goBack(){
-    window.location.href="index.html";
+function goBack() {
+    window.location.href = "index.html";
+}
+
+function doPrint() {
+    // iOS-safe: kleiner Delay + user gesture bleibt erhalten
+    setTimeout(() => {
+        window.print();
+    }, 100);
+}
+
+const DB_NAME = "vinothekDB";
+const DB_VERSION = 6;
+
+let db = null;
+
+const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+request.onsuccess = (e) => {
+    db = e.target.result;
+    load();
+};
+
+function load() {
+    const tx = db.transaction("weine", "readonly");
+    const store = tx.objectStore("weine");
+
+    const container = document.getElementById("qrContainer");
+    container.innerHTML = "";
+
+    const seen = new Set();
+
+    store.openCursor().onsuccess = (e) => {
+        const cursor = e.target.result;
+
+        if (!cursor) return;
+
+        const w = cursor.value;
+
+        const key = (w.lagerort || "") + "_" + (w.platz || "");
+
+        if (!seen.has(key)) {
+            seen.add(key);
+
+            const card = document.createElement("div");
+            card.className = "card";
+
+            const title = document.createElement("div");
+            title.innerText = w.lagerort + " / " + w.platz;
+
+            const qrDiv = document.createElement("div");
+
+            card.appendChild(title);
+            card.appendChild(qrDiv);
+
+            container.appendChild(card);
+
+            new QRCode(qrDiv, {
+                text:
+                    `${window.location.origin}/index.html?lagerort=` +
+                    `${encodeURIComponent(w.lagerort)}` +
+                    `&platz=${encodeURIComponent(w.platz)}`,
+                width: 120,
+                height: 120
+            });
+        }
+
+        cursor.continue();
+    };
 }
 </script>
 

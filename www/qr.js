@@ -115,6 +115,12 @@ function goBack() {
     window.history.back();
 }
 
-function printQR() {
-    window.print();
+function doPrint() {
+    if (window.Capacitor) {
+        // iOS workaround: Safari öffnen
+        window.location.href = window.location.href;
+        setTimeout(() => window.print(), 500);
+    } else {
+        window.print();
+    }
 }
