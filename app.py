@@ -1,9 +1,13 @@
 from flask import Flask, request, jsonify, send_from_directory
-import json, os, re
+import json, os, re, time
 from openai import OpenAI
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 from flask import Response
+
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__, static_folder="www", static_url_path="")
 
@@ -29,10 +33,30 @@ def find_wine_by_id(wine_id):
         if w["id"] == wine_id:
             return w
     return None
+    
+def save_image(file):
+    if not file or file.filename == "":
+        return ""
+
+    filename = secure_filename(file.filename)
+
+    import time
+    unique_name = f"{int(time.time())}_{filename}"
+
+    path = os.path.join(UPLOAD_FOLDER, unique_name)
+
+    file.seek(0)  # � wichtig!
+    file.save(path)
+
+    return f"/uploads/{unique_name}"
 
 # ------------------------------
 # REST API
 # ------------------------------
+
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route("/api/weine", methods=["GET"])
 def get_all_wines():
@@ -75,8 +99,37 @@ def create_or_update_wine():
         platz = data.get("platz", "")
 
         existing = find_wine_by_id(wine_id)
+
+        # -------------------------
+        # BILDER VERARBEITEN
+        # -------------------------
+        front_file = request.files.get("bildFront")
+        back_file = request.files.get("bildBack")
+
+        bildFront = ""
+        bildBack = ""
+
+        if front_file:
+            bildFront = save_image(front_file)
+
+        if back_file:
+            bildBack = save_image(back_file)
+
+        # alte Bilder löschen
         if existing:
-            weine_db.remove(existing)
+            if bildFront:
+                old = existing.get("bildFront")
+                if old:
+                    old_path = old.replace("/uploads/", "uploads/")
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
+
+            if bildBack:
+                old = existing.get("bildBack")
+                if old:
+                    old_path = old.replace("/uploads/", "uploads/")
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
 
         wine_entry = {
             "id": wine_id,
@@ -96,8 +149,8 @@ def create_or_update_wine():
             "bewertungsQuelle": data.get("bewertungsQuelle", ""),
             "ocrTextFront": data.get("ocrTextFront", ""),
             "ocrTextBack": data.get("ocrTextBack", ""),
-            "bild": data.get("bild", ""),
-            "bildRueck": data.get("bildRueck", "")
+            "bildFront": bildFront or (existing.get("bildFront") if existing else ""),
+            "bildBack": bildBack or (existing.get("bildBack") if existing else "")
         }
 
         weine_db.append(wine_entry)
@@ -112,9 +165,20 @@ def create_or_update_wine():
 @app.route("/api/weine/<wine_id>", methods=["DELETE"])
 def delete_wine(wine_id):
     existing = find_wine_by_id(wine_id)
+
     if existing:
+        # � Bilder löschen
+        for key in ["bildFront", "bildBack"]:
+            img = existing.get(key)
+            if img:
+                path = img.replace("/uploads/", "uploads/")
+                if os.path.exists(path):
+                    os.remove(path)
+                    print("� Bild gelöscht:", path)
+
         weine_db.remove(existing)
         save_db()
+
     return jsonify({"status": "deleted"})
 
 # ------------------------------
