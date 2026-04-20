@@ -13,6 +13,9 @@ let currentSortField = "";
 let sortAsc = true;
 let initDone = false;
 let dbReady = false;
+let lastKnownHash = "";
+let qrLoaded = false;
+
 
 const DB_NAME = "vinothekDB";
 const DB_VERSION = 6;
@@ -412,6 +415,25 @@ function loadWineIntoForm(wine) {
     if (imgBack) imgBack.src = wine.bildBack || "";
     currentEditId = wine.id;
     console.log("QR LOAD currentEditId:", currentEditId);
+}
+
+async function checkForUpdates() {
+
+    if (currentEditId) return;
+
+    try {
+        const res = await fetch(`${API_URL}/hash`);
+        const data = await res.json();
+
+        if (data.hash !== lastKnownHash) {
+            console.log("� Änderung erkannt (HASH)");
+            lastKnownHash = data.hash;
+            loadWeine();
+        }
+
+    } catch (err) {
+        console.error("Update-Check Fehler:", err);
+    }
 }
 
 // --------------------
@@ -1027,6 +1049,27 @@ function startQRScan() {
         });
 }
 
+function handleQRLoad() {
+    if (qrLoaded) return;
+
+    const params = new URLSearchParams(window.location.search);
+
+    const lagerort = params.get("lagerort");
+    const platz = params.get("platz");
+
+    if (!lagerort || !platz) return;
+
+    const wine = wineCache.find(w =>
+        w.lagerort === lagerort &&
+        w.platz === platz
+    );
+
+    if (wine) {
+        loadWineIntoForm(wine);
+        qrLoaded = true;
+    }
+}
+
 function openWineFromQRText(qrText) {
     try {
         const url = new URL(qrText);
@@ -1122,6 +1165,11 @@ function initApp() {
     }
 
     loadWeine();
+
+    // 🔥 NEU: QR-Parameter auswerten
+    setTimeout(() => {
+        handleQRLoad();
+    }, 500); // warten bis Daten geladen sind
 }
 
 // ======================
@@ -1133,3 +1181,8 @@ document.addEventListener("DOMContentLoaded", () => {
         initApp();
     }
 });
+
+// ======================
+// Check Update by Hash
+// ======================
+setInterval(checkForUpdates, 3000);

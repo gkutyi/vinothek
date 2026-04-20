@@ -3,6 +3,7 @@ import json, os, re, time
 from openai import OpenAI
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+import hashlib
 
 from flask import Response
 
@@ -33,6 +34,11 @@ def find_wine_by_id(wine_id):
         if w["id"] == wine_id:
             return w
     return None
+
+def get_hash():
+    return hashlib.md5(
+        json.dumps(weine_db, sort_keys=True).encode()
+    ).hexdigest()
     
 def save_image(file):
     if not file or file.filename == "":
@@ -86,6 +92,11 @@ def create_or_update_wine():
             wine_json = request.form.get("wine")
             if wine_json:
                 data = json.loads(wine_json)
+                
+        print("---- SAVE START ----")
+        print("RAW DATA:", data)
+        print("ID TYPE:", type(data.get("id")))
+        print("ID VALUE:", data.get("id"))
 
         # -------------------------
         # VALIDATION
@@ -131,6 +142,9 @@ def create_or_update_wine():
                     if os.path.exists(old_path):
                         os.remove(old_path)
 
+        # ❗ ALLE mit gleicher ID entfernen
+        weine_db[:] = [w for w in weine_db if str(w["id"]) != str(wine_id)]
+        
         wine_entry = {
             "id": wine_id,
             "name": data.get("name", ""),
@@ -154,6 +168,7 @@ def create_or_update_wine():
         }
 
         weine_db.append(wine_entry)
+        print("DB BEFORE SAVE:", [w["id"] for w in weine_db])
         save_db()
 
         return jsonify({"status": "ok", "id": wine_id})
@@ -177,6 +192,7 @@ def delete_wine(wine_id):
                     print("� Bild gelöscht:", path)
 
         weine_db.remove(existing)
+        print("DB BEFORE SAVE:", [w["id"] for w in weine_db])
         save_db()
 
     return jsonify({"status": "deleted"})
@@ -333,6 +349,10 @@ def serve_file(path):
     else:
         return send_from_directory(app.static_folder, "index.html")
 
+@app.route("/api/weine/hash", methods=["GET"])
+def get_weine_hash():
+    return jsonify({"hash": get_hash()})
+    
 # ------------------------------
 # Main
 # ------------------------------

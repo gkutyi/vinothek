@@ -1,5 +1,8 @@
 const DB_NAME = "vinothekDB";
 const DB_VERSION = 6;
+const SERVER_URL = "http://10.0.0.30:5000";
+const API_URL = `${SERVER_URL}/api/weine`;
+const isMobileApp = window.location.protocol === "capacitor:";
 
 let db;
 
@@ -15,6 +18,14 @@ request.onerror = (e) => {
 };
 
 function loadQRCodes() {
+    if (isMobileApp) {
+        loadQRCodesFromDB();
+    } else {
+        loadQRCodesFromServer();
+    }
+}
+
+function loadQRCodesFromDB() {
     const tx = db.transaction("weine", "readonly");
     const store = tx.objectStore("weine");
 
@@ -24,26 +35,40 @@ function loadQRCodes() {
         const cursor = e.target.result;
 
         if (cursor) {
-            const wine = cursor.value;
-
-            const lagerort = wine.lagerort || "Unbekannt";
-            const platz = wine.platz || "Ohne Platz";
-
-            if (!lagerMap[lagerort]) {
-                lagerMap[lagerort] = {};
-            }
-
-            if (!lagerMap[lagerort][platz]) {
-                lagerMap[lagerort][platz] = [];
-            }
-
-            lagerMap[lagerort][platz].push(wine);
-
+            addWineToMap(cursor.value, lagerMap);
             cursor.continue();
         } else {
             renderQRCodes(lagerMap);
         }
     };
+}
+
+async function loadQRCodesFromServer() {
+    try {
+        const res = await fetch(API_URL);
+        const wines = await res.json();
+
+        const lagerMap = {};
+
+        wines.forEach(wine => {
+            addWineToMap(wine, lagerMap);
+        });
+
+        renderQRCodes(lagerMap);
+
+    } catch (err) {
+        console.error("QR Load Server Fehler:", err);
+    }
+}
+
+function addWineToMap(wine, lagerMap) {
+    const lagerort = wine.lagerort || "Unbekannt";
+    const platz = wine.platz || "Ohne Platz";
+
+    if (!lagerMap[lagerort]) lagerMap[lagerort] = {};
+    if (!lagerMap[lagerort][platz]) lagerMap[lagerort][platz] = [];
+
+    lagerMap[lagerort][platz].push(wine);
 }
 
 function renderQRCodes(lagerMap) {
